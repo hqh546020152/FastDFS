@@ -1,0 +1,753 @@
+FastDFS分布式存储系统改造
+Tracker:一(两)台tracker服务器进行调度工作，起圴衡的作用，负责管理所有的storage sever和group。
+Storage:一(两)组，一组两台。其负责存储，组内冗余副本。实现易扩展。
+
+1、准备工作
+下载libfastcommon
+https://github.com/happyfish100/libfastcommon/archive/master.zip
+下载FastDFS
+http://sourceforge.net/projects/fastdfs/files/FastDFS%20Server%20Source%20Code/FastDFS%20Server%20with%20PHP%20Extension%20Source%20Code%20V5.05/FastDFS_v5.05.tar.gz
+下载ngx_cache_purge
+https://github.com/FRiCKLE/ngx_cache_purge/
+下载nginx
+wget http://nginx.org/download/nginx-1.10.0.tar.gz
+
+
+2、安装FastDFS(Tracker和Storage端都安装)
+
+yum install -y zlib zlib-devel pcre pcre-devel gcc gcc-c++ openssl openssl-devel libevent libevent-devel perl unzip
+
+useradd -s /sbin/nologin www
+
+(改)顺序
+tar zxvf FastDFS_v5.05.tar.gz 
+cd FastDFS
+./make.sh
+./make.sh install
+cp -pa /opt/FastDFS/conf/* /etc/fdfs/
+
+(改)顺序
+cd /opt/FastDFS
+unzip master.zip
+cd libfastcommon-master/
+./make.sh
+./make.sh install
+
+
+3、配置Tracker端
+
+mkdir -p /data/fastdfs/tracker
+mkdir -p /data/fastdfs/client
+
+3.1配置tracker.conf
+vi /etc/fdfs/tracker.conf
+
+disabled=false                                   #启用配置文件
+
+bind_addr=
+
+port=22122                                       #设置tracker的端口号
+
+connect_timeout=30
+
+network_timeout=60
+
+base_path=/data/fastdfs/tracker                 #设置tracker的数据文件和日志目录（需预先创建)
+
+max_connections=256
+
+accept_threads=1
+
+work_threads=4
+
+store_lookup=2
+
+store_group=group2
+
+store_server=0
+
+store_path=0
+
+download_server=0
+
+reserved_storage_space = 10%
+
+log_level=info
+
+run_by_group=
+
+run_by_user=
+
+allow_hosts=*
+
+sync_log_buff_interval = 10
+
+check_active_interval = 120
+
+thread_stack_size = 64KB
+
+storage_ip_changed_auto_adjust = true
+
+storage_sync_file_max_delay = 86400
+
+storage_sync_file_max_time = 300
+
+use_trunk_file = false 
+
+slot_min_size = 256
+
+slot_max_size = 16MB
+
+trunk_file_size = 64MB
+
+trunk_create_file_advance = false
+
+trunk_create_file_time_base = 02:00
+
+trunk_create_file_interval = 86400
+
+trunk_create_file_space_threshold = 20G
+
+trunk_init_check_occupying = false
+
+trunk_init_reload_from_binlog = false
+
+trunk_compress_binlog_min_interval = 0
+
+use_storage_id = false
+
+storage_ids_filename = storage_ids.conf
+
+id_type_in_filename = ip
+
+store_slave_file_use_link = false
+
+rotate_error_log = false
+
+error_log_rotate_time=00:00
+
+rotate_error_log_size = 0
+
+log_file_keep_days = 0
+
+use_connection_pool = false
+
+connection_pool_max_idle_time = 3600
+
+http.server_port=8080                                  #设置http端口号
+
+http.check_alive_interval=30
+
+http.check_alive_type=tcp
+
+http.check_alive_uri=/status.html
+
+3.2配置clinet.conf
+
+connect_timeout=30
+
+network_timeout=60
+
+base_path=/data/fastdfs/client            #日志存放路径
+
+tracker_server=192.168.168.26:22122      #tracker服务器IP地址和端口号
+
+log_level=info
+
+use_connection_pool = false
+
+connection_pool_max_idle_time = 3600
+
+load_fdfs_parameters_from_tracker=false
+
+use_storage_id = false
+
+storage_ids_filename = storage_ids.conf
+
+
+http.tracker_server_port=8080             #tracker服务器的http端口号
+
+
+启动fastdfs tracker端
+/usr/bin/fdfs_trackerd /etc/fdfs/tracker.conf
+
+/usr/bin/fdfs_trackerd /etc/fdfs/tracker.conf restart
+写入系统服务,开机自动启动
+echo "/usr/bin/fdfs_trackerd /etc/fdfs/tracker.conf restart" >> /etc/rc.d/rc.local
+chmod  755 /etc/rc.d/rc.local
+
+4、Storage端
+mkdir -p /data/fastdfs/storage
+mkdir -p /data/fastdfs/store_data
+
+4.1安装nginx及fastdfs-nginx-module模块
+(改)：需提前下载该模块，并且对版本有严格要求。
+vi /opt/FastDFS/fastdfs-nginx-module-master/src/config
+#更改如下， 去掉local，并指定lib64（64系统）
+CORE_INCS="$CORE_INCS /usr/include/fastdfs /usr/include/fastcommon/"
+CORE_LIBS="$CORE_LIBS -L /usr/lib64 -lfastcommon -lfdfsclient"
+
+安装ngix时加载
+(--add-module=/opt/FastDFS/fastdfs-nginx-module-master/src/)
+tar -zxvf nginx-1.10.0.tar.gz
+cd nginx-1.10.0/
+./configure \
+  --prefix=/data/nginx/ \
+  --user=www \
+  --group=www \
+  --with-http_ssl_module \
+  --with-http_flv_module \
+  --with-http_mp4_module \
+  --with-http_realip_module \
+  --with-http_stub_status_module \
+  --with-http_gzip_static_module \
+  --add-module=/opt/FastDFS/fastdfs-nginx-module-master/src/ \
+  --http-client-body-temp-path=/data/nginx/tmp/nginx/client/ \
+  --http-proxy-temp-path=/data/nginx/tmp/nginx/proxy/ \
+  --http-fastcgi-temp-path=/data/nginx/tmp/nginx/fcgi/ \
+  --http-uwsgi-temp-path=/data/nginx/tmp/nginx/uwsgi \
+  --http-scgi-temp-path=/data/nginx/tmp/nginx/scgi \
+  --with-pcre
+make && make install
+
+cp /opt/FastDFS/fastdfs-nginx-module-master/src/mod_fastdfs.conf /etc/fdfs
+
+cd /data
+mkdir -p /data/nginx/tmp/nginx/client
+chown -R www: nginx/
+
+4.2 配置group组的Storage端(以G1组为例)
+vi /etc/fdfs/storage.conf
+
+disabled=false                #启用配置文件
+
+group_name=G1                 #组名，根据实际情况修改                                       
+
+bind_addr=
+
+client_bind=true
+
+port=23000                 #设置storage的端口号
+
+connect_timeout=30
+
+network_timeout=60
+
+heart_beat_interval=30
+
+stat_report_interval=60
+
+base_path=/data/fastdfs/storage      #设置storage的日志目录（需预先创建）    
+
+max_connections=256
+
+buff_size = 256KB
+
+accept_threads=1
+
+work_threads=4
+
+disk_rw_separated = true
+
+disk_reader_threads = 1
+
+disk_writer_threads = 1
+
+sync_wait_msec=50
+
+sync_interval=0
+
+sync_start_time=00:00
+
+sync_end_time=23:59
+
+write_mark_file_freq=500
+
+store_path_count=1                       #存储路径个数，需要和store_path个数匹配
+
+store_path0=/data/fastdfs/store_data     #存储路径
+
+subdir_count_per_path=256
+
+tracker_server=192.168.168.26:22122     #tracker服务器的IP地址和端口号(根据实际情况修改)
+
+log_level=info
+
+run_by_group=
+
+run_by_user=
+
+allow_hosts=*
+
+file_distribute_path_mode=0
+
+file_distribute_rotate_count=100
+
+fsync_after_written_bytes=0
+
+sync_log_buff_interval=10
+
+sync_binlog_buff_interval=10
+
+sync_stat_file_interval=300
+
+thread_stack_size=512KB
+
+upload_priority=10
+
+if_alias_prefix=
+
+check_file_duplicate=0
+
+file_signature_method=hash
+
+key_namespace=FastDFS
+
+keep_alive=0
+
+
+use_access_log = false
+
+rotate_access_log = false
+
+access_log_rotate_time=00:00
+
+rotate_error_log = false
+
+error_log_rotate_time=00:00
+
+rotate_access_log_size = 0
+
+rotate_error_log_size = 0
+
+log_file_keep_days = 0
+
+file_sync_skip_invalid_record=false
+
+use_connection_pool = false
+
+connection_pool_max_idle_time = 3600
+
+http.domain_name=
+
+http.server_port=8888                      
+
+启动fastdfs Storage端
+ln -s /data/fastdfs/store_data/data /data/fastdfs/store_data/M00
+
+/usr/bin/fdfs_storaged /etc/fdfs/storage.conf
+
+/usr/bin/fdfs_storaged /etc/fdfs/storage.conf restart
+写入系统服务,开机自动启动
+
+echo "/usr/bin/fdfs_storaged /etc/fdfs/storage.conf restart" >> /etc/rc.d/rc.local
+chmod  755 /etc/rc.d/rc.local
+
+4.3查看storage服务器是否已经登记到tracker服务器
+/usr/bin/fdfs_monitor /etc/fdfs/storage.conf
+或/usr/bin/fdfs_monitor /etc/fdfs/client.conf
+看到“192.168.168.28  ACTIVE”即可确认storage运行正常。
+
+5设置Storage端nginx及mod_fastdfs.conf
+
+5.1配置nginx
+
+touch /data/fastdfs/storage/logs/mod_fastdfs.log
+chown www:www /data/fastdfs/storage/logs/mod_fastdfs.log
+(增)：修改日志权限，访问nginx无法使用。
+
+vi /data/nginx/conf/nginx.conf
+
+#user  nobody;
+ user  www;
+worker_processes  1;
+
+#error_log  logs/error.log;
+#error_log  logs/error.log  notice;
+#error_log  logs/error.log  info;
+
+#pid        logs/nginx.pid;
+
+
+events {
+    worker_connections  1024;
+}
+
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    server_tokens  off;
+
+    #log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+    #                  '$status $body_bytes_sent "$http_referer" '
+    #                  '"$http_user_agent" "$http_x_forwarded_for"';
+
+    #access_log  logs/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    #keepalive_timeout  0;
+    keepalive_timeout  65;
+
+    #gzip  on;
+
+    server {
+        listen       8080;
+        server_name  localhost;
+
+        #charset koi8-r;
+
+        #access_log  logs/host.access.log  main;
+
+        location ~/G[1-5]/M00 {
+           root /data/fastdfs/store_data/;
+               ngx_fastdfs_module;
+        }
+
+        location / {
+            root   html;
+            index  index.html index.htm;
+        }
+
+}
+
+
+5.2配置mod_fastdfs.conf(以G1组为例)
+
+vi /etc/fdfs/mod_fastdfs.conf
+
+connect_timeout=2
+
+network_timeout=30
+
+base_path=/tmp
+
+load_fdfs_parameters_from_tracker=true
+
+storage_sync_file_max_delay = 86400
+
+use_storage_id = false
+
+storage_ids_filename = storage_ids.conf
+
+tracker_server=192.168.168.26:22122        #tracker服务器的IP地址以及端口号
+
+storage_server_port=23000                   #storage服务器的端口号
+
+group_name=G1                               #当前服务器的group名
+
+url_have_group_name = true                  #文件url中是否有group名
+
+store_path_count=1                          #存储路径个数，需要和store_path个数匹配
+
+store_path0=/data/fastdfs/store_data        #存储路径
+
+log_level=info
+
+log_filename=/data/fastdfs/storage/logs/mod_fastdfs.log  #日志
+
+response_mode=proxy
+
+if_alias_prefix=
+
+flv_support = true
+
+flv_extension = flv
+
+http.need_find_content_type=true              #从文件扩展名查找文件类型（nginx时为true）
+
+group_count = 1                            #设置组的个数(根据实际情况)
+
+
+[group1]
+group_name=G1
+storage_server_port=23000
+store_path_count=1
+store_path0=/data/fastdfs/store_data
+
+#[group2]
+#group_name=G2
+#storage_server_port=23000
+#store_path_count=1
+#store_path0=/data/fastdfs/store_data
+
+启动nginx
+
+启动：/data/nginx/sbin/nginx
+重启：/data/nginx/sbin/nginx -s reload
+停止：/data/nginx/sbin/nginx -s stop
+重新加载配置文件:
+/data/nginx/sbin/nginx -c /data/nginx/conf/nginx.conf
+
+6、用nginx实现反代理和负载均衡。
+
+unzip ngx_cache_purge-master.zip
+
+6.1安装ngix时加载
+(--add-module=/opt/FastDFS/ngx_cache_purge-master)
+tar -zxvf nginx-1.10.0.tar.gz
+cd nginx-1.10.0/
+./configure \
+  --prefix=/data/nginx/ \
+  --user=www \
+  --group=www \
+  --with-http_ssl_module \
+  --with-http_flv_module \
+  --with-http_mp4_module \
+  --with-http_realip_module \
+  --with-http_stub_status_module \
+  --with-http_gzip_static_module \
+  --add-module=/opt/FastDFS/ngx_cache_purge-master \
+  --http-client-body-temp-path=/data/nginx/tmp/nginx/client/ \
+  --http-proxy-temp-path=/data/nginx/tmp/nginx/proxy/ \
+  --http-fastcgi-temp-path=/data/nginx/tmp/nginx/fcgi/ \
+  --http-uwsgi-temp-path=/data/nginx/tmp/nginx/uwsgi \
+  --http-scgi-temp-path=/data/nginx/tmp/nginx/scgi \
+  --with-pcre
+make && make install
+
+cd /data
+mkdir -p /data/nginx/tmp/nginx/client
+chown -R www: nginx/
+
+6.2 配置nginx.conf
+
+worker_processes  2;                  #根据CPU核心数而定
+
+events{
+
+    worker_connections  65535;       #最大链接数
+
+    use epoll;           #使用epoll加快处理性能        
+
+}
+
+http{
+
+server_tokens off;
+
+#设置缓存参数
+
+server_names_hash_bucket_size  128;
+
+client_header_buffer_size      32k;
+
+large_client_header_buffers    4 32k;
+
+client_max_body_size       300m;
+
+sendfile        on;
+
+tcp_nopush      on;
+
+proxy_redirect  off;
+
+proxy_set_header  Host $http_host;
+
+proxy_set_header  X-Real-IP $remote_addr;
+
+proxy_set_header  X-Forwarded-For $proxy_add_x_forwarded_for;
+
+proxy_connect_timeout 90;
+
+proxy_send_timeout 90;
+
+proxy_read_timeout 90;
+
+proxy_buffer_size  16k;
+
+proxy_buffers 4 64k;
+
+proxy_busy_buffers_size 128k;
+
+proxy_temp_file_write_size 128k;
+
+#设置缓存存储路径、存储方式、分配内存大小、磁盘最大空间、缓存期限
+
+proxy_cache_path /data/nginx/tmp/nginx/proxy/proxy_cache levels=1:2 keys_zone=http-cache:500m max_size=10g inactive=1d;
+
+proxy_temp_path /data/nginx/tmp/nginx/proxy/proxy_cache/tmp;
+
+#设置从trackers的服务器上传
+	
+upstream tarckers {
+	     
+server 192.168.168.26:22122 weight=1 max_fails=2 fail_timeout=30s;
+		 
+server 192.168.168.27:22122 weight=1 max_fails=2 fail_timeout=30s;
+	
+    }
+
+#设置G1的服务器
+
+upstream fdfs_group1 {
+
+server 192.168.168.28:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+server 192.168.168.29:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+    }
+
+#设置G2的服务器
+
+upstream fdfs_group2 {
+
+server 192.168.168.30:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+server 192.168.168.31:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+    }
+
+#设置G3的服务器
+
+upstream fdfs_group3 {
+
+server 192.168.168.32:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+server 192.168.168.33:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+    }
+
+#设置G4的服务器
+
+upstream fdfs_group4 {
+
+server 192.168.168.34:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+server 192.168.168.35:80 weight=1 max_fails=2 fail_timeout=30s;
+
+    }
+
+#设置G5的服务器
+
+upstream fdfs_group5 {
+
+server 192.168.168.36:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+server 192.168.168.37:8080 weight=1 max_fails=2 fail_timeout=30s;
+
+    }
+ 
+
+server{
+
+#设置服务器端口
+
+listen       80;
+
+#设置G1的负载均衡参数
+
+location /G1/M00 {
+
+    proxy_next_upstream http_502 http_504 error timeout invalid_header;
+
+    proxy_cache  http-cache;
+
+    proxy_cache_valid  200 304 12h;
+
+    proxy_cache_key $uri$is_args$args;
+
+    proxy_pass http://fdfs_group1;
+
+    expires  -1;
+
+        }
+
+#设置G2的负载均衡参数
+
+location /G2/M00 {
+
+   proxy_next_upstream http_502 http_504 error timeout invalid_header;
+
+   proxy_cache  http-cache;
+
+   proxy_cache_valid  200 304 12h;
+
+   proxy_cache_key $uri$is_args$args;
+
+   proxy_pass http://fdfs_group2;
+
+   expires  -1;
+
+        }
+
+#设置G3的负载均衡参数
+
+location /G3/M00 {
+
+   proxy_next_upstream http_502 http_504 error timeout invalid_header;
+
+   proxy_cache  http-cache;
+
+   proxy_cache_valid  200 304 12h;
+
+   proxy_cache_key $uri$is_args$args;
+
+   proxy_pass http://fdfs_group3;
+
+   expires  -1;
+
+        }
+
+#设置G4的负载均衡参数
+
+location /G4/M00 {
+
+   proxy_next_upstream http_502 http_504 error timeout invalid_header;
+
+   proxy_cache  http-cache;
+
+   proxy_cache_valid  200 304 12h;
+
+   proxy_cache_key $uri$is_args$args;
+
+   proxy_pass http://fdfs_group4;
+
+   expires  -1;
+
+        }
+
+#设置G5的负载均衡参数
+
+location /G5/M00 {
+
+   proxy_next_upstream http_502 http_504 error timeout invalid_header;
+
+   proxy_cache  http-cache;
+
+   proxy_cache_valid  200 304 12h;
+
+   proxy_cache_key $uri$is_args$args;
+
+   proxy_pass http://fdfs_group5;
+
+  expires  -1;
+
+        }
+
+#设置清除缓存的访问权限
+
+location ~ /purge(/.*) {
+
+allow 127.0.0.1;
+
+allow 192.168.168.0/24;
+
+deny all;
+
+proxy_cache_purge http-cache  $1$is_args$args;
+
+    } 
+
+
+7、验证FastDFS是否正常
+使用/usr/local/bin/fdfs_upload_file上传一个文件，程序会自动返回文件的URL。
+
+(增)：验证步骤
+	命令：
+		/usr/bin/fdfs_upload_file /etc/fdfs/client.conf  FILE.TXT
+	将返回
+		URL
+	通过：访问nginx+URL 看能否获取文件，有则正常可用、无则异常。
